@@ -3,7 +3,7 @@ name = "mcp-discord"
 version = "0.1.0"
 description = "Discord integration for Model Context Protocol"
 authors = [
-    {name = "Your Name", email = "your.email@example.com"},
+    {name = "Your Name", email = "hanwegaltimer@outlook.com"},
 ]
 dependencies = [
     "discord.py>=2.3.0",
@@ -14,8 +14,8 @@ readme = "README.md"
 license = {file = "LICENSE"}
 
 [project.urls]
-Homepage = "https://github.com/yourusername/mcp-discord"
-Repository = "https://github.com/yourusername/mcp-discord.git"
+Homepage = "https://github.com/hanwegaltimer/mcp-discord"
+Repository = "https://github.com/hanwegaltimer/mcp-discord.git"
 
 [build-system]
 requires = ["hatchling"]
