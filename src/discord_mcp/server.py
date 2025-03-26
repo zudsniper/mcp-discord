@@ -8,11 +8,24 @@ import json
 import discord
 from discord.ext import commands
 from mcp.server import Server
-from mcp.types import Tool, TextContent, EmptyResult
+from mcp.types import Tool, TextContent, Resource, EmptyResult
 from mcp.server.stdio import stdio_server
+from pydantic import AnyUrl
+from pathlib import Path
 # Configure logging
 logging.basicConfig(level=logging.ERROR)
 logger = logging.getLogger("discord-mcp-server")
+
+fixed_resources = {
+    "examples/chat.md": {
+        "name": "Chat Example",
+        "description": "An example of using messaging tools to chat with discord users.",
+    },
+    "examples/moderation.md": {
+        "name": "Moderation Example",
+        "description": "An example of using management tools to moderate discord users.",
+    }
+}
 
 # Discord bot setup
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
@@ -324,6 +337,15 @@ async def list_tools() -> List[Tool]:
             }
         ),
         Tool(
+            name="get_self_info",
+            description="Get information about the current Discord bot",
+            inputSchema={
+                "type": "object",
+                "properties": {},
+                "required": []
+            }
+        ),
+        Tool(
             name="moderate_message",
             description="Delete a message and optionally timeout the user",
             inputSchema={
@@ -419,6 +441,18 @@ async def call_tool(name: str, arguments: Any) -> List[TextContent]:
                      f"Reactions: {', '.join([f'{r['emoji']}({r['count']})' for r in m['reactions']]) if m['reactions'] else 'No reactions'}"
                      for m in messages
                  ])
+        )]
+    
+    elif name == "get_self_info":
+        content = json.dumps({
+            "bot":discord_client.user.bot,
+            "id":discord_client.user.id,
+            "name":discord_client.user.name,
+            "discriminator": discord_client.user.discriminator
+            },indent=0)
+        return [TextContent(
+            type="text",
+            text=content
         )]
 
     elif name == "get_user_info":
@@ -603,6 +637,32 @@ async def call_tool(name: str, arguments: Any) -> List[TextContent]:
         )]
 
     raise ValueError(f"Unknown tool: {name}")
+
+@app.list_resources()
+async def list_resources() -> list[Resource]:
+    return [
+        Resource(
+            uri=AnyUrl(f"file://{key}"),
+            name=fixed_resources[key]["name"],
+            description=fixed_resources[key]["description"],
+            mimeType="text/plain",
+        )
+        for key in fixed_resources.keys()
+    ]
+
+@app.read_resource()
+async def read_resource(uri: AnyUrl) -> str:
+    if not uri:
+        raise ValueError("Missing resource_name parameter")
+    if uri.scheme != "file":
+        raise ValueError(f"Unsupported URI scheme: {uri.scheme}")
+    resource_name = str(uri).replace("file://", "")
+    if resource_name in list(fixed_resources.keys()):
+        file_path = Path(__file__).resolve().parent / resource_name
+        with open(file_path, "r") as file:
+            return file.read()
+    else:
+        return "Resource not found."
 
 async def main():
     # Start Discord bot in the background
