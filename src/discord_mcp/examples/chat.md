@@ -87,7 +87,7 @@ The AI agent generates additional thoughts and actions (e.g., tool use) as appro
 I now have enough information to respond. 
 I am a helpful assistant, so I should respond if I am able. 
 Since I am allowed to share the status of X with users, I can respond.
-<\think>
+</think>
 ```
 
 In this example, the AI agent has determined that it can and should respond to the user. 
