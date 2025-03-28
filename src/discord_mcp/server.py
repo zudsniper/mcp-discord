@@ -4,18 +4,34 @@ import logging
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 from functools import wraps
-
+import json
 import discord
 from discord.ext import commands
 from mcp.server import Server
-from mcp.types import Tool, TextContent, EmptyResult
+from mcp.types import Tool, TextContent, Resource, EmptyResult
 from mcp.server.stdio import stdio_server
+from pydantic import AnyUrl
+from pathlib import Path
 # Configure logging
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.ERROR)
 logger = logging.getLogger("discord-mcp-server")
+
+fixed_resources = {
+    "examples/chat.md": {
+        "name": "Chat Example",
+        "description": "An example of using messaging tools to chat with discord users.",
+    },
+    "examples/moderation.md": {
+        "name": "Moderation Example",
+        "description": "An example of using management tools to moderate discord users.",
+    }
+}
 
 # Discord bot setup
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
+DISCORD_TIMEOUT = os.getenv("DISCORD_TIMEOUT")
+discord_timeout = float(DISCORD_TIMEOUT) if DISCORD_TIMEOUT else 60.0
+
 if not DISCORD_TOKEN:
     raise ValueError("DISCORD_TOKEN environment variable is required")
 
@@ -31,11 +47,25 @@ app = Server("discord-server")
 # Store Discord client reference
 discord_client = None
 
+# Add a global set to store recent mentions
+recent_mentions = set()
+
 @bot.event
 async def on_ready():
     global discord_client
     discord_client = bot
     logger.info(f"Logged in as {bot.user.name}")
+
+@bot.event
+async def on_message(message):
+    global recent_mentions
+    if message.author == bot.user:
+        return
+
+    # Check if the bot is mentioned
+    if f"<@{bot.user.id}>" in message.content:
+        # Add the channel ID to recent_mentions
+        recent_mentions.add(message.channel.id)
 
 # Helper function to ensure Discord client is ready
 def require_discord_client(func):
@@ -282,6 +312,11 @@ async def list_tools() -> List[Tool]:
                         "description": "Number of messages to fetch (max 100)",
                         "minimum": 1,
                         "maximum": 100
+                    },
+                    "order": {
+                        "type": "string",
+                        "description": "Order of messages (ascending or descending)",
+                        "enum": ["ascending", "descending"]
                     }
                 },
                 "required": ["channel_id"]
@@ -299,6 +334,15 @@ async def list_tools() -> List[Tool]:
                     }
                 },
                 "required": ["user_id"]
+            }
+        ),
+        Tool(
+            name="get_self_info",
+            description="Get information about the current Discord bot",
+            inputSchema={
+                "type": "object",
+                "properties": {},
+                "required": []
             }
         ),
         Tool(
@@ -328,14 +372,23 @@ async def list_tools() -> List[Tool]:
                 },
                 "required": ["channel_id", "message_id", "reason"]
             }
+        ),
+        Tool(
+            name="await_mention",
+            description="Wait for the bot to be mentioned and return a list of channel IDs where mentions have recently occurred",
+            inputSchema={
+                "type": "object",
+                "properties": {},
+                "required": []
+            }
         )
     ]
 
 @app.call_tool()
 @require_discord_client
 async def call_tool(name: str, arguments: Any) -> List[TextContent]:
-    """Handle Discord tool calls."""
-    
+    global recent_mentions
+
     if name == "send_message":
         channel = await discord_client.fetch_channel(int(arguments["channel_id"]))
         message = await channel.send(arguments["content"])
@@ -345,8 +398,18 @@ async def call_tool(name: str, arguments: Any) -> List[TextContent]:
         )]
 
     elif name == "read_messages":
-        channel = await discord_client.fetch_channel(int(arguments["channel_id"]))
+        channel_id = int(arguments["channel_id"])
+        # Remove the channel ID from recent_mentions
+        recent_mentions.discard(channel_id)
+
+        # If recent_mentions is empty, allow await_mention to wait
+        if not recent_mentions:
+            recent_mentions.clear()
+
+        # ...existing code for reading messages...
+        channel = await discord_client.fetch_channel(channel_id)
         limit = min(int(arguments.get("limit", 10)), 100)
+        order = arguments.get("order", "descending")
         fetch_users = arguments.get("fetch_reaction_users", False)  # Only fetch users if explicitly requested
         messages = []
         async for message in channel.history(limit=limit):
@@ -357,23 +420,39 @@ async def call_tool(name: str, arguments: Any) -> List[TextContent]:
                     "emoji": emoji_str,
                     "count": reaction.count
                 }
-                logger.error(f"Emoji: {emoji_str}")
+                logger.info(f"Emoji: {emoji_str}")
                 reaction_data.append(reaction_info)
+            # Replace user ID with username in message content
+            content = message.content.replace(f"<@{discord_client.user.id}>", f"@{discord_client.user.name}")
             messages.append({
                 "id": str(message.id),
                 "author": str(message.author),
-                "content": message.content,
+                "content": content,
                 "timestamp": message.created_at.isoformat(),
-                "reactions": reaction_data  # Add reactions to message dict
+                "reactions": reaction_data
             })
+        if order == "ascending":
+                messages.reverse()
         return [TextContent(
             type="text",
-            text=f"Retrieved {len(messages)} messages:\n\n" + 
+            text=f"Retrieved {len(messages)} messages:\n\n" +
                  "\n".join([
                      f"{m['author']} ({m['timestamp']}): {m['content']}\n" +
                      f"Reactions: {', '.join([f'{r['emoji']}({r['count']})' for r in m['reactions']]) if m['reactions'] else 'No reactions'}"
                      for m in messages
                  ])
+        )]
+    
+    elif name == "get_self_info":
+        content = json.dumps({
+            "bot":discord_client.user.bot,
+            "id":discord_client.user.id,
+            "name":discord_client.user.name,
+            "discriminator": discord_client.user.discriminator
+            },indent=0)
+        return [TextContent(
+            type="text",
+            text=content
         )]
 
     elif name == "get_user_info":
@@ -538,7 +617,52 @@ async def call_tool(name: str, arguments: Any) -> List[TextContent]:
             text=f"Removed reaction {arguments['emoji']} from message"
         )]
 
+    if name == "await_mention":
+        # Wait for recent_mentions to have channel IDs
+        T=0.0
+        dt=0.1
+        while not recent_mentions and T < discord_timeout:
+            T=T+dt
+            await asyncio.sleep(dt)  # Wait for mentions to accumulate
+        # Convert recent_mentions to a JSON string and clear it
+        if len(recent_mentions) > 1:
+            mentions = json.dumps({"Recent mentions in channels": list(recent_mentions)}, indent=0)
+        if len(recent_mentions) == 1:
+            mentions = f"Recent mentions in channel: {list(recent_mentions)[0]}"
+        if len(recent_mentions) == 0:
+            mentions = "No recent mentions"
+        return [TextContent(
+            type="text",
+            text=mentions
+        )]
+
     raise ValueError(f"Unknown tool: {name}")
+
+@app.list_resources()
+async def list_resources() -> list[Resource]:
+    return [
+        Resource(
+            uri=AnyUrl(f"file://{key}"),
+            name=fixed_resources[key]["name"],
+            description=fixed_resources[key]["description"],
+            mimeType="text/plain",
+        )
+        for key in fixed_resources.keys()
+    ]
+
+@app.read_resource()
+async def read_resource(uri: AnyUrl) -> str:
+    if not uri:
+        raise ValueError("Missing resource_name parameter")
+    if uri.scheme != "file":
+        raise ValueError(f"Unsupported URI scheme: {uri.scheme}")
+    resource_name = str(uri).replace("file://", "")
+    if resource_name in list(fixed_resources.keys()):
+        file_path = Path(__file__).resolve().parent / resource_name
+        with open(file_path, "r") as file:
+            return file.read()
+    else:
+        return "Resource not found."
 
 async def main():
     # Start Discord bot in the background
