@@ -34,6 +34,21 @@ A Model Context Protocol (MCP) server that provides Discord integration capabili
 - `modify_webhook`: Update webhook settings
 - `delete_webhook`: Delete a webhook
 
+### Chat Workflow
+- `await_mention`: Wait for the bot to be mentioned and return a list of channel IDs where mentions have recently occurred
+
+#### Chat Workflow
+
+Supports a chat workflow:
+
+1. Wait for mentions using `await_mention`
+2. Read recent messages with `read_messages`
+3. Process the messages and determine an appropriate response
+4. Send a response using `send_message`
+5. Repeat as needed
+
+See the included `chat.md`
+
 ## Installation
 
 ### Installing via Smithery
@@ -81,6 +96,7 @@ uv pip install -e .
       ],
       "env": {
         "DISCORD_TOKEN": "your_bot_token"
+        "DISCORD_TIMEOUT": "60.0"
       }
     }
 ```
