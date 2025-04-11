@@ -366,14 +366,25 @@ async def call_tool(name: str, arguments: Any) -> List[TextContent]:
                 "timestamp": message.created_at.isoformat(),
                 "reactions": reaction_data  # Add reactions to message dict
             })
+        
+        # Format the output string
+        message_lines = []
+        for m in messages:
+            reactions_str = (
+                ", ".join([f"{r['emoji']}({r['count']})" for r in m["reactions"]])
+                if m["reactions"]
+                else "No reactions"
+            )
+            message_lines.append(
+                f"{m['author']} ({m['timestamp']}): {m['content']}\n"
+                f"Reactions: {reactions_str}"
+            )
+        
+        output_text = f"Retrieved {len(messages)} messages:\n\n" + "\n".join(message_lines)
+
         return [TextContent(
             type="text",
-            text=f"Retrieved {len(messages)} messages:\n\n" + 
-                 "\n".join([
-                     f"{m['author']} ({m['timestamp']}): {m['content']}\n" +
-                     f"Reactions: {', '.join([f'{r['emoji']}({r['count']})' for r in m['reactions']]) if m['reactions'] else 'No reactions'}"
-                     for m in messages
-                 ])
+            text=output_text
         )]
 
     elif name == "get_user_info":
