@@ -4,6 +4,7 @@ import os
 from datetime import datetime
 from functools import wraps
 from typing import Any, Dict, List, Optional
+import json
 
 import discord
 from discord.ext import commands
@@ -50,6 +51,69 @@ def require_discord_client(func):
 @app.list_tools()
 async def list_tools() -> List[Tool]:
     """List available Discord tools."""
+    # Define a common message schema for reuse
+    message_schema = {
+        "type": "object",
+        "properties": {
+            "content": {
+                "type": "string",
+                "description": "Message content"
+            },
+            "embeds": {
+                "type": "array",
+                "description": "Array of embed objects to attach to the message",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "title": {"type": "string", "description": "Embed title"},
+                        "description": {"type": "string", "description": "Embed description"},
+                        "url": {"type": "string", "description": "URL for embed title"},
+                        "color": {"type": "integer", "description": "Color code for the embed (decimal value)"},
+                        "timestamp": {"type": "string", "description": "ISO8601 timestamp"},
+                        "footer": {
+                            "type": "object",
+                            "properties": {
+                                "text": {"type": "string"},
+                                "icon_url": {"type": "string"}
+                            }
+                        },
+                        "thumbnail": {
+                            "type": "object",
+                            "properties": {"url": {"type": "string"}}
+                        },
+                        "image": {
+                            "type": "object",
+                            "properties": {"url": {"type": "string"}}
+                        },
+                        "author": {
+                            "type": "object",
+                            "properties": {
+                                "name": {"type": "string"},
+                                "url": {"type": "string"},
+                                "icon_url": {"type": "string"}
+                            }
+                        },
+                        "fields": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "name": {"type": "string"},
+                                    "value": {"type": "string"},
+                                    "inline": {"type": "boolean"}
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "anyOf": [
+            {"required": ["content"]},
+            {"required": ["embeds"]}
+        ]
+    }
+    
     return [
         # Server Information Tools
         Tool(
@@ -269,12 +333,10 @@ async def list_tools() -> List[Tool]:
                         "type": "string",
                         "description": "Discord channel ID"
                     },
-                    "content": {
-                        "type": "string",
-                        "description": "Message content"
-                    }
+                    **message_schema["properties"]
                 },
-                "required": ["channel_id", "content"]
+                "required": ["channel_id"],
+                "anyOf": message_schema["anyOf"]
             }
         ),
         Tool(
@@ -351,12 +413,10 @@ async def list_tools() -> List[Tool]:
                         "type": "string",
                         "description": "Discord user ID to send DM to"
                     },
-                    "content": {
-                        "type": "string",
-                        "description": "Message content"
-                    }
+                    **message_schema["properties"]
                 },
-                "required": ["user_id", "content"]
+                "required": ["user_id"],
+                "anyOf": message_schema["anyOf"]
             }
         ),
         Tool(
@@ -369,17 +429,15 @@ async def list_tools() -> List[Tool]:
                         "type": "string",
                         "description": "Discord user ID to send DM to"
                     },
-                    "content": {
-                        "type": "string",
-                        "description": "Message content to send"
-                    },
                     "timeout": {
                         "type": "number",
                         "description": "Maximum time to wait for response in seconds",
                         "default": 60
-                    }
+                    },
+                    **message_schema["properties"]
                 },
-                "required": ["user_id", "content"]
+                "required": ["user_id"],
+                "anyOf": message_schema["anyOf"]
             }
         )
     ]
@@ -391,7 +449,65 @@ async def call_tool(name: str, arguments: Any) -> List[TextContent]:
     
     if name == "send_message":
         channel = await discord_client.fetch_channel(int(arguments["channel_id"]))
-        message = await channel.send(arguments["content"])
+        
+        # Prepare kwargs for message sending
+        kwargs = {}
+        if "content" in arguments:
+            kwargs["content"] = arguments["content"]
+        
+        # Handle embeds if provided
+        if "embeds" in arguments and arguments["embeds"]:
+            embeds = []
+            for embed_data in arguments["embeds"]:
+                embed = discord.Embed()
+                
+                # Set basic embed properties
+                if "title" in embed_data:
+                    embed.title = embed_data["title"]
+                if "description" in embed_data:
+                    embed.description = embed_data["description"]
+                if "url" in embed_data:
+                    embed.url = embed_data["url"]
+                if "color" in embed_data:
+                    embed.color = embed_data["color"]
+                if "timestamp" in embed_data and embed_data["timestamp"]:
+                    embed.timestamp = datetime.fromisoformat(embed_data["timestamp"])
+                
+                # Set author if provided
+                if "author" in embed_data:
+                    name = embed_data["author"].get("name", "")
+                    url = embed_data["author"].get("url", None)
+                    icon_url = embed_data["author"].get("icon_url", None)
+                    embed.set_author(name=name, url=url, icon_url=icon_url)
+                
+                # Set footer if provided
+                if "footer" in embed_data:
+                    text = embed_data["footer"].get("text", "")
+                    icon_url = embed_data["footer"].get("icon_url", None)
+                    embed.set_footer(text=text, icon_url=icon_url)
+                
+                # Set thumbnail if provided
+                if "thumbnail" in embed_data and "url" in embed_data["thumbnail"]:
+                    embed.set_thumbnail(url=embed_data["thumbnail"]["url"])
+                
+                # Set image if provided
+                if "image" in embed_data and "url" in embed_data["image"]:
+                    embed.set_image(url=embed_data["image"]["url"])
+                
+                # Add fields if provided
+                if "fields" in embed_data:
+                    for field in embed_data["fields"]:
+                        embed.add_field(
+                            name=field.get("name", ""),
+                            value=field.get("value", ""),
+                            inline=field.get("inline", False)
+                        )
+                
+                embeds.append(embed)
+            
+            kwargs["embeds"] = embeds
+        
+        message = await channel.send(**kwargs)
         return [TextContent(
             type="text",
             text=f"Message sent successfully. Message ID: {message.id}"
@@ -412,12 +528,17 @@ async def call_tool(name: str, arguments: Any) -> List[TextContent]:
                 }
                 logger.error(f"Emoji: {emoji_str}")
                 reaction_data.append(reaction_info)
+            
+            # Convert embeds to dictionaries
+            embed_dicts = [embed.to_dict() for embed in message.embeds]
+
             messages.append({
                 "id": str(message.id),
                 "author": str(message.author),
                 "content": message.content,
                 "timestamp": message.created_at.isoformat(),
-                "reactions": reaction_data  # Add reactions to message dict
+                "reactions": reaction_data,  # Add reactions to message dict
+                "embeds": embed_dicts  # Add embeds to message dict
             })
         
         # Format the output string
@@ -428,12 +549,16 @@ async def call_tool(name: str, arguments: Any) -> List[TextContent]:
                 if m["reactions"]
                 else "No reactions"
             )
+            # Include embeds in the output string, formatted as JSON
+            embeds_str = f"\nEmbeds: {json.dumps(m['embeds'], indent=2)}" if m['embeds'] else ""
+            
             message_lines.append(
                 f"{m['author']} ({m['timestamp']}): {m['content']}\n"
                 f"Reactions: {reactions_str}"
+                f"{embeds_str}" 
             )
         
-        output_text = f"Retrieved {len(messages)} messages:\n\n" + "\n".join(message_lines)
+        output_text = f"Retrieved {len(messages)} messages:\n\n" + "\n\\n---\\n".join(message_lines) # Separator for clarity
 
         return [TextContent(
             type="text",
@@ -621,8 +746,66 @@ async def call_tool(name: str, arguments: Any) -> List[TextContent]:
     elif name == "send_dm":
         user = await discord_client.fetch_user(int(arguments["user_id"]))
         dm_channel = await user.create_dm()
+        
+        # Prepare kwargs for message sending
+        kwargs = {}
+        if "content" in arguments:
+            kwargs["content"] = arguments["content"]
+        
+        # Handle embeds if provided
+        if "embeds" in arguments and arguments["embeds"]:
+            embeds = []
+            for embed_data in arguments["embeds"]:
+                embed = discord.Embed()
+                
+                # Set basic embed properties
+                if "title" in embed_data:
+                    embed.title = embed_data["title"]
+                if "description" in embed_data:
+                    embed.description = embed_data["description"]
+                if "url" in embed_data:
+                    embed.url = embed_data["url"]
+                if "color" in embed_data:
+                    embed.color = embed_data["color"]
+                if "timestamp" in embed_data and embed_data["timestamp"]:
+                    embed.timestamp = datetime.fromisoformat(embed_data["timestamp"])
+                
+                # Set author if provided
+                if "author" in embed_data:
+                    name = embed_data["author"].get("name", "")
+                    url = embed_data["author"].get("url", None)
+                    icon_url = embed_data["author"].get("icon_url", None)
+                    embed.set_author(name=name, url=url, icon_url=icon_url)
+                
+                # Set footer if provided
+                if "footer" in embed_data:
+                    text = embed_data["footer"].get("text", "")
+                    icon_url = embed_data["footer"].get("icon_url", None)
+                    embed.set_footer(text=text, icon_url=icon_url)
+                
+                # Set thumbnail if provided
+                if "thumbnail" in embed_data and "url" in embed_data["thumbnail"]:
+                    embed.set_thumbnail(url=embed_data["thumbnail"]["url"])
+                
+                # Set image if provided
+                if "image" in embed_data and "url" in embed_data["image"]:
+                    embed.set_image(url=embed_data["image"]["url"])
+                
+                # Add fields if provided
+                if "fields" in embed_data:
+                    for field in embed_data["fields"]:
+                        embed.add_field(
+                            name=field.get("name", ""),
+                            value=field.get("value", ""),
+                            inline=field.get("inline", False)
+                        )
+                
+                embeds.append(embed)
+            
+            kwargs["embeds"] = embeds
+        
         try:
-            message = await dm_channel.send(arguments["content"])
+            message = await dm_channel.send(**kwargs)
             return [TextContent(
                 type="text",
                 text=f"DM sent successfully to {user.name}. Message ID: {message.id}"
@@ -646,9 +829,66 @@ async def call_tool(name: str, arguments: Any) -> List[TextContent]:
         dm_channel = await user.create_dm()
         timeout = int(arguments.get("timeout", 60))
         
+        # Prepare kwargs for message sending
+        kwargs = {}
+        if "content" in arguments:
+            kwargs["content"] = arguments["content"]
+        
+        # Handle embeds if provided
+        if "embeds" in arguments and arguments["embeds"]:
+            embeds = []
+            for embed_data in arguments["embeds"]:
+                embed = discord.Embed()
+                
+                # Set basic embed properties
+                if "title" in embed_data:
+                    embed.title = embed_data["title"]
+                if "description" in embed_data:
+                    embed.description = embed_data["description"]
+                if "url" in embed_data:
+                    embed.url = embed_data["url"]
+                if "color" in embed_data:
+                    embed.color = embed_data["color"]
+                if "timestamp" in embed_data and embed_data["timestamp"]:
+                    embed.timestamp = datetime.fromisoformat(embed_data["timestamp"])
+                
+                # Set author if provided
+                if "author" in embed_data:
+                    name = embed_data["author"].get("name", "")
+                    url = embed_data["author"].get("url", None)
+                    icon_url = embed_data["author"].get("icon_url", None)
+                    embed.set_author(name=name, url=url, icon_url=icon_url)
+                
+                # Set footer if provided
+                if "footer" in embed_data:
+                    text = embed_data["footer"].get("text", "")
+                    icon_url = embed_data["footer"].get("icon_url", None)
+                    embed.set_footer(text=text, icon_url=icon_url)
+                
+                # Set thumbnail if provided
+                if "thumbnail" in embed_data and "url" in embed_data["thumbnail"]:
+                    embed.set_thumbnail(url=embed_data["thumbnail"]["url"])
+                
+                # Set image if provided
+                if "image" in embed_data and "url" in embed_data["image"]:
+                    embed.set_image(url=embed_data["image"]["url"])
+                
+                # Add fields if provided
+                if "fields" in embed_data:
+                    for field in embed_data["fields"]:
+                        embed.add_field(
+                            name=field.get("name", ""),
+                            value=field.get("value", ""),
+                            inline=field.get("inline", False)
+                        )
+                
+                embeds.append(embed)
+            
+            kwargs["embeds"] = embeds
+        
         try:
             # Send the message
-            sent_message = await dm_channel.send(arguments["content"])
+            sent_message = await dm_channel.send(**kwargs)
             
             # Define a check function to filter messages
             def check(message):
@@ -658,10 +898,13 @@ async def call_tool(name: str, arguments: Any) -> List[TextContent]:
                 # Wait for the response with timeout
                 response = await discord_client.wait_for('message', check=check, timeout=timeout)
                 
+                # Prepare the sent message content for display
+                sent_content = sent_message.content if sent_message.content else "Embed message"
+                
                 return [TextContent(
                     type="text",
                     text=(f"DM conversation with {user.name}:\n"
-                         f"Bot: {arguments['content']}\n"
+                         f"Bot: {sent_content}\n"
                          f"{user.name}: {response.content}\n"
                          f"Response received at: {response.created_at.isoformat()}")
                 )]
@@ -700,3 +943,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
