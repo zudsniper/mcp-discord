@@ -529,8 +529,47 @@ async def call_tool(name: str, arguments: Any) -> List[TextContent]:
                 logger.error(f"Emoji: {emoji_str}")
                 reaction_data.append(reaction_info)
             
-            # Convert embeds to dictionaries
-            embed_dicts = [embed.to_dict() for embed in message.embeds]
+            # Process embeds explicitly to ensure all data is captured
+            embed_dicts = []
+            for embed in message.embeds:
+                embed_dict = {
+                    "title": embed.title,
+                    "description": embed.description,
+                    "url": embed.url,
+                    "color": embed.color.value if embed.color else None,
+                    "timestamp": embed.timestamp.isoformat() if embed.timestamp else None,
+                    "fields": [
+                        {
+                            "name": field.name,
+                            "value": field.value,
+                            "inline": field.inline
+                        } for field in embed.fields
+                    ]
+                }
+                
+                # Handle author
+                if embed.author:
+                    embed_dict["author"] = {
+                        "name": embed.author.name,
+                        "url": embed.author.url,
+                        "icon_url": embed.author.icon_url
+                    }
+                
+                # Handle footer
+                if embed.footer:
+                    embed_dict["footer"] = {
+                        "text": embed.footer.text,
+                        "icon_url": embed.footer.icon_url
+                    }
+                
+                # Handle images
+                if embed.thumbnail:
+                    embed_dict["thumbnail"] = {"url": embed.thumbnail.url}
+                
+                if embed.image:
+                    embed_dict["image"] = {"url": embed.image.url}
+                
+                embed_dicts.append(embed_dict)
 
             messages.append({
                 "id": str(message.id),
@@ -549,8 +588,40 @@ async def call_tool(name: str, arguments: Any) -> List[TextContent]:
                 if m["reactions"]
                 else "No reactions"
             )
-            # Include embeds in the output string, formatted as JSON
-            embeds_str = f"\nEmbeds: {json.dumps(m['embeds'], indent=2)}" if m['embeds'] else ""
+            
+            # Format embeds more clearly
+            embeds_str = ""
+            if m['embeds']:
+                embeds_str = "\nEmbeds:"
+                for i, embed in enumerate(m['embeds']):
+                    embeds_str += f"\n  Embed {i+1}:"
+                    if embed.get('title'):
+                        embeds_str += f"\n    Title: {embed['title']}"
+                    if embed.get('description'):
+                        embeds_str += f"\n    Description: {embed['description']}"
+                    if embed.get('url'):
+                        embeds_str += f"\n    URL: {embed['url']}"
+                    if embed.get('color'):
+                        embeds_str += f"\n    Color: {embed['color']}"
+                    if embed.get('timestamp'):
+                        embeds_str += f"\n    Timestamp: {embed['timestamp']}"
+                    
+                    if embed.get('author'):
+                        embeds_str += f"\n    Author: {embed['author'].get('name', '')}"
+                    
+                    if embed.get('footer'):
+                        embeds_str += f"\n    Footer: {embed['footer'].get('text', '')}"
+                    
+                    if embed.get('thumbnail'):
+                        embeds_str += f"\n    Thumbnail: {embed['thumbnail'].get('url', '')}"
+                    
+                    if embed.get('image'):
+                        embeds_str += f"\n    Image: {embed['image'].get('url', '')}"
+                    
+                    if embed.get('fields'):
+                        embeds_str += "\n    Fields:"
+                        for field in embed['fields']:
+                            embeds_str += f"\n      {field['name']}: {field['value']} ({'Inline' if field.get('inline') else 'Not inline'})"
             
             message_lines.append(
                 f"{m['author']} ({m['timestamp']}): {m['content']}\n"
@@ -558,7 +629,7 @@ async def call_tool(name: str, arguments: Any) -> List[TextContent]:
                 f"{embeds_str}" 
             )
         
-        output_text = f"Retrieved {len(messages)} messages:\n\n" + "\n\\n---\\n".join(message_lines) # Separator for clarity
+        output_text = f"Retrieved {len(messages)} messages:\n\n" + "\n━━━━━━━━━━━━━━━━━━━━━━\n".join(message_lines) # Separator for clarity
 
         return [TextContent(
             type="text",
